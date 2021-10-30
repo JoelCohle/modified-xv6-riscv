@@ -488,11 +488,11 @@ void scheduler(void)
     // As long as firstproc contains a process
     if (firstproc)
     {
-        firstComeProc->state = RUNNING;
-        c->proc = firstComeProc;
-        swtch(&c->context, &firstComeProc->context); //context switching
+        firstproc->state = RUNNING;
+        c->proc = firstproc;
+        swtch(&c->context, &firstproc->context); //context switching
         c->proc = 0;
-        release(&firstComeProc->lock);
+        release(&firstproc->lock);
     }
 #endif
 #endif
