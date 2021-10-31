@@ -108,7 +108,7 @@ struct proc {
   uint64 num_runs;               // Number of times the process is executed
   uint64 starttime;              // Start time for the process
   uint64 sleeptime;              // time the process spends sleeping
-  uint64 netrtime;               // Total run time for the process
+  uint64 total_rtime;            // Total run time for the process
 
   uint64 kstack;               // Virtual address of kernel stack
   uint64 sz;                   // Size of process memory (bytes)
