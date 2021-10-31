@@ -102,6 +102,14 @@ struct proc {
   // FCFS
   uint64 ctime;                // Creation time of the process
 
+  // PBS
+  uint64 rtime;                  // run time for the process in the current run
+  uint64 priority;               // Priority for the current process
+  uint64 num_runs;               // Number of times the process is executed
+  uint64 starttime;              // Start time for the process
+  uint64 sleeptime;              // time the process spends sleeping
+  uint64 netrtime;               // Total run time for the process
+
   uint64 kstack;               // Virtual address of kernel stack
   uint64 sz;                   // Size of process memory (bytes)
   pagetable_t pagetable;       // User page table

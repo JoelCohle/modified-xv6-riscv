@@ -120,6 +120,11 @@ found:
   p->ctime = ticks;
   p->pid = allocpid();
   p->state = USED;
+  p->priority = 60;
+  p->num_runs = 0;
+  p->sleeptime = 0;
+  p->rtime = 0;
+
   // Allocate a trapframe page.
   if((p->trapframe = (struct trapframe *)kalloc()) == 0){
     freeproc(p);
@@ -430,6 +435,20 @@ wait(uint64 addr)
   }
 }
 
+void updateProcTimes(void)
+{
+  struct proc *p;
+  for (p = proc; p < &proc[NPROC]; p++)
+  {
+    acquire(&p->lock);
+    if (p->state == RUNNING)
+      p->rtime++;
+    if (p->state == SLEEPING)
+      p->sleeptime++;
+    release(&p->lock);
+  }
+}
+
 // Per-CPU process scheduler.
 // Each CPU calls scheduler() after setting itself up.
 // Scheduler never returns.  It loops, doing:
@@ -494,6 +513,56 @@ void scheduler(void)
         c->proc = 0;
         release(&firstComeProc->lock);
     }
+#else
+#ifdef PBS
+    struct proc *minProc = 0;
+    int dp =1000;
+    for (p = proc; p < &proc[NPROC]; p++)
+    {
+      acquire(&p->lock);
+      int niceness = 5, wtime = 0;
+
+      if(p->nrun > 0)
+      {
+        niceness = (p->sleeptime * 10) / (p->sleeptime + p->rtime);
+      }
+      int proc_dp = p->priority - niceness + 5 < 100 ? (p->priority - niceness + 5) : 100;
+      proc_dp = proc_dp < 100 ? proc_dp: 100;
+      proc_dp = 0 > proc_dp ? 0:proc_dp;
+
+      if (p->state == RUNNABLE)
+      {
+          if (minProc == 0 || proc_dp < dp || 
+          (dp==proc_dp && 
+          (p->nRun  < minProc->nRun || (p->nRun == minProc->nRun && p->ctime < minProc->ctime )))) 
+          {
+              if(minProc)
+                release(&minProc->lock);
+
+              dp = proc_dp;
+              minProc = p;
+              continue;
+          }
+          release(&p->lock);
+      }
+    }
+    if (minProc)
+    {
+      minProc->nrun += 1;
+      minProc->starttime = ticks;
+      minProc->state = RUNNING;
+      minProc->rtime = 0;
+
+      c->proc = minProc;
+      swtch(&c->scheduler, &minProc->context);
+      
+      // Process is done running for now.
+      // It should have changed its p->state before coming back.
+      c->proc = 0;
+      release(&minProc->lock);
+    }
+
+#endif
 #endif
 #endif
   }

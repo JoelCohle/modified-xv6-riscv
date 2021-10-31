@@ -191,7 +191,7 @@ syscall(void)
   if(num > 0 && num < NELEM(syscalls) && syscalls[num]) {
     p->trapframe->a0 = syscalls[num]();
     if(p->mask & 1 << num){ 
-      printf("%d: syscall %s (", p->pid, syscall_names[num], p->trapframe->a0);
+      printf("%d: syscall %s (", p->pid, syscall_names[num]);
       for (int i = 0; i < syscallnumargs[num]; i++){
         if (i == 0)
           printf("%d ", p->trapframe->a0);
@@ -204,7 +204,7 @@ syscall(void)
         else if (i == 4)
           printf("%d ", p->trapframe->a4);
       }
-      printf("\b) -> %d\n", p->trapframe->a0);
+      printf("\b) -> %d\n", argraw(0));
     }
   } 
   else {
