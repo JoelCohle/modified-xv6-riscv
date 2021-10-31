@@ -120,6 +120,12 @@ found:
   p->ctime = ticks;
   p->pid = allocpid();
   p->state = USED;
+  p->priority = 60;
+  p->num_runs = 0;
+  p->sleeptime = 0;
+  p->rtime = 0;
+  p->total_rtime = 0;
+
   // Allocate a trapframe page.
   if((p->trapframe = (struct trapframe *)kalloc()) == 0){
     freeproc(p);
@@ -430,6 +436,22 @@ wait(uint64 addr)
   }
 }
 
+void updateProcTimes(void)
+{
+  struct proc *p;
+  for (p = proc; p < &proc[NPROC]; p++)
+  {
+    acquire(&p->lock);
+    if (p->state == RUNNING){
+      p->rtime++;
+      p->total_rtime++;
+    }
+    if (p->state == SLEEPING)
+      p->sleeptime++;
+    release(&p->lock);
+  }
+}
+
 // Per-CPU process scheduler.
 // Each CPU calls scheduler() after setting itself up.
 // Scheduler never returns.  It loops, doing:
@@ -469,24 +491,24 @@ void scheduler(void)
     }
 #else
 #ifdef FCFS
-    struct proc *firstProc = 0;
+    struct proc *firstComeProc = 0;
     for (p = proc; p < &proc[NPROC]; p++)
     {
       acquire(&p->lock);
-      if (p->state == RUNNNABLE)
+      if (p->state == RUNNABLE)
       {
-        if (firstproc == NULL || firstproc->ctime > p->ctime)
+        if (!firstComeProc || firstComeProc->ctime > p->ctime)
         {
-          if (firstproc)
-            release(&firstproc->lock);
-          firstproc = p;
+          if (firstComeProc)
+            release(&firstComeProc->lock);
+          firstComeProc = p;
           continue;
         }
       }
       release(&p->lock);
     }
     // As long as firstproc contains a process
-    if (firstproc)
+    if (firstComeProc)
     {
         firstproc->state = RUNNING;
         c->proc = firstproc;
@@ -494,6 +516,58 @@ void scheduler(void)
         c->proc = 0;
         release(&firstproc->lock);
     }
+#else
+#ifdef PBS
+    struct proc *priorityProc = 0;
+    int dp = 120;
+    for (p = proc; p < &proc[NPROC]; p++)
+    {
+      acquire(&p->lock);
+      int niceness = 5;
+
+      if(p->num_runs > 0)
+      {
+        niceness = (int)((p->sleeptime * 10) / (p->sleeptime + p->rtime));
+      }
+      int proc_dp = p->priority - niceness + 5 < 100 ? (p->priority - niceness + 5) : 100;
+      proc_dp = proc_dp < 100 ? proc_dp: 100;
+      proc_dp = 0 > proc_dp ? 0:proc_dp;
+
+      if (p->state == RUNNABLE)
+      {
+        if (!priorityProc || proc_dp < dp || 
+        (dp==proc_dp && 
+        (p->num_runs  < priorityProc->num_runs || (p->num_runs == priorityProc->num_runs && p->ctime < priorityProc->ctime )))) 
+        {
+            if(priorityProc)
+              release(&priorityProc->lock);
+
+            dp = proc_dp;
+            priorityProc = p;
+            continue;
+        }
+      }
+      release(&p->lock);
+    }
+    if (priorityProc)
+    {
+      priorityProc->num_runs++;
+      priorityProc->starttime = ticks;
+      priorityProc->state = RUNNING;
+      priorityProc->rtime = 0;
+      priorityProc->sleeptime = 0;
+
+      c->proc = priorityProc;
+      swtch(&c->context, &priorityProc->context);
+      c->proc = 0;
+      release(&priorityProc->lock);
+    }
+
+#else
+#ifdef MLFQ
+
+#endif
+#endif
 #endif
 #endif
   }
@@ -685,7 +759,51 @@ procdump(void)
       state = states[p->state];
     else
       state = "???";
+
+    #ifdef RR
     printf("%d %s %s", p->pid, state, p->name);
     printf("\n");
+    #else
+    #ifdef FCFS
+    printf("%d %s %s", p->pid, state, p->name);
+    printf("\n");
+    #else
+    #ifdef PBS
+    int wtime = ticks - p->ctime - p->total_rtime;
+    printf("%d %s %s\t%d\t%d\t%d", p->pid, state, p->name, p->total_rtime, wtime, p->num_runs);
+    printf("\n");
+    #else
+    #ifdef MLFQ
+    printf("%d %s %s %d %d %d", p->pid, state, p->name, p->total_rtime, wtime, p->num_runs);
+    printf("\n");
+    #endif
+    #endif
+    #endif
+    #endif
   }
+}
+
+int set_priority(int priority, int pid)
+{
+    int val = -1;
+    struct proc *p;
+
+    for(p = proc; p < &proc[NPROC]; p++)
+    {
+      acquire(&p->lock);
+
+      if(p->pid == pid)
+      {
+        val = p->priority;
+        p->priority = priority;
+
+        release(&p->lock);
+
+        if (val > priority)
+            yield();
+        break;
+      }
+      release(&p->lock);
+    }
+    return val;
 }
