@@ -379,6 +379,7 @@ exit(int status)
 
   p->xstate = status;
   p->state = ZOMBIE;
+  p->etime = ticks;
 
   release(&wait_lock);
 
@@ -452,6 +453,57 @@ void updateProcTimes(void)
   }
 }
 
+// Wait for a child process to exit and return its pid.
+// Return -1 if this process has no children.
+int
+waitx(uint64 addr, uint* rtime, uint* wtime)
+{
+  struct proc *np;
+  int havekids, pid;
+  struct proc *p = myproc();
+
+  acquire(&wait_lock);
+
+  for(;;){
+    // Scan through table looking for exited children.
+    havekids = 0;
+    for(np = proc; np < &proc[NPROC]; np++){
+      if(np->parent == p){
+        // make sure the child isn't still in exit() or swtch().
+        acquire(&np->lock);
+
+        havekids = 1;
+        if(np->state == ZOMBIE){
+          // Found one.
+          pid = np->pid;
+          *rtime = np->total_rtime;
+          *wtime = np->etime - np->ctime - np->total_rtime;
+          if(addr != 0 && copyout(p->pagetable, addr, (char *)&np->xstate,
+                                  sizeof(np->xstate)) < 0) {
+            release(&np->lock);
+            release(&wait_lock);
+            return -1;
+          }
+          freeproc(np);
+          release(&np->lock);
+          release(&wait_lock);
+          return pid;
+        }
+        release(&np->lock);
+      }
+    }
+
+    // No point waiting if we don't have any children.
+    if(!havekids || p->killed){
+      release(&wait_lock);
+      return -1;
+    }
+
+    // Wait for a child to exit.
+    sleep(p, &wait_lock);  //DOC: wait-sleep
+  }
+}
+
 // Per-CPU process scheduler.
 // Each CPU calls scheduler() after setting itself up.
 // Scheduler never returns.  It loops, doing:
@@ -479,6 +531,7 @@ void scheduler(void)
         // Switch to chosen process.  It is the process's job
         // to release its lock and then reacquire it
         // before jumping back to us.
+        p->num_runs++;
         p->state = RUNNING;
         c->proc = p;
         swtch(&c->context, &p->context);
@@ -510,11 +563,12 @@ void scheduler(void)
     // As long as firstproc contains a process
     if (firstComeProc)
     {
-        firstproc->state = RUNNING;
-        c->proc = firstproc;
-        swtch(&c->context, &firstproc->context); //context switching
-        c->proc = 0;
-        release(&firstproc->lock);
+      firstComeProc->num_runs++;
+      firstComeProc->state = RUNNING;
+      c->proc = firstComeProc;
+      swtch(&c->context, &firstComeProc->context); //context switching
+      c->proc = 0;
+      release(&firstComeProc->lock);
     }
 #else
 #ifdef PBS
@@ -525,7 +579,7 @@ void scheduler(void)
       acquire(&p->lock);
       int niceness = 5;
 
-      if(p->num_runs > 0)
+      if(p->num_runs > 0 && p->sleeptime + p->rtime != 0)
       {
         niceness = (int)((p->sleeptime * 10) / (p->sleeptime + p->rtime));
       }
@@ -537,7 +591,7 @@ void scheduler(void)
       {
         if (!priorityProc || proc_dp < dp || 
         (dp==proc_dp && 
-        (p->num_runs  < priorityProc->num_runs || (p->num_runs == priorityProc->num_runs && p->ctime < priorityProc->ctime )))) 
+        (p->num_runs < priorityProc->num_runs || (p->num_runs == priorityProc->num_runs && p->ctime < priorityProc->ctime )))) 
         {
             if(priorityProc)
               release(&priorityProc->lock);
@@ -760,23 +814,17 @@ procdump(void)
     else
       state = "???";
 
-    #ifdef RR
-    printf("%d %s %s", p->pid, state, p->name);
-    printf("\n");
-    #else
-    #ifdef FCFS
-    printf("%d %s %s", p->pid, state, p->name);
-    printf("\n");
+    #if defined RR || defined FCFS
+    int wtime = ticks - p->ctime - p->total_rtime;
+    printf("%d\t%s\t%d\t%d\t%d\n", p->pid, state, p->total_rtime, wtime, p->num_runs);
     #else
     #ifdef PBS
     int wtime = ticks - p->ctime - p->total_rtime;
-    printf("%d %s %s\t%d\t%d\t%d", p->pid, state, p->name, p->total_rtime, wtime, p->num_runs);
-    printf("\n");
+    printf("%d\t%d\t%s\t%d\t%d\t%d\n", p->pid, p->priority , state, p->total_rtime, wtime, p->num_runs);
     #else
     #ifdef MLFQ
-    printf("%d %s %s %d %d %d", p->pid, state, p->name, p->total_rtime, wtime, p->num_runs);
-    printf("\n");
-    #endif
+    int wtime = ticks - p->ctime - p->total_rtime;
+    printf("%d %d %s %d %d %d\n", p->pid, p->priority , state, p->total_rtime, wtime, p->num_runs);
     #endif
     #endif
     #endif
@@ -796,7 +844,8 @@ int set_priority(int priority, int pid)
       {
         val = p->priority;
         p->priority = priority;
-
+        p->rtime = 0;
+        p->sleeptime = 0;
         release(&p->lock);
 
         if (val > priority)

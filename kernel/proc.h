@@ -110,6 +110,8 @@ struct proc {
   uint64 sleeptime;              // time the process spends sleeping
   uint64 total_rtime;            // Total run time for the process
 
+  uint64 etime;
+
   uint64 kstack;               // Virtual address of kernel stack
   uint64 sz;                   // Size of process memory (bytes)
   pagetable_t pagetable;       // User page table
